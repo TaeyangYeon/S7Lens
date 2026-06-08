@@ -1,6 +1,6 @@
 # Siemens PLC Monitor — Progress
 
-## 현재 진행 단계: Step 4 완료
+## 현재 진행 단계: Step 5 완료
 
 ## Phase 1: 프로젝트 초기화 + 데이터 모델
 - [x] Step 1: Cargo 초기화 + 핵심 데이터 모델 + snap7 FFI 골격
@@ -15,11 +15,50 @@
 - [x] Step 4: Live Monitor 실시간 표시 + blink 애니메이션 + 설정 JSON
 
 ## Phase 5: C# Export + 최종 통합
-- [ ] Step 5: C# 클래스 Export + 빌드 검증 + README
+- [x] Step 5: C# 클래스 Export + 빌드 검증 + README
 
 ---
 
 <!-- 완료된 Step의 내역은 아래에 역순으로 기록 (최신이 위) -->
+
+---
+
+## Step 5 완료 기록 — 2026-06-08
+
+### 생성/수정된 파일
+| 경로 | 내용 |
+|------|------|
+| `src/export/mod.rs` | `export` 모듈 선언 — `csharp` 서브모듈 재-export |
+| `src/export/csharp.rs` | `generate_csharp` 함수: VarType별 C# 프로퍼티 생성, String 타입 byte 배열 + 헬퍼 프로퍼티, chrono 타임스탬프 헤더; 15개 단위 테스트 |
+| `src/app.rs` | Export 행 추가 (`export_path` TextEdit + `📤 Export C# Class` 버튼), `export_status: Option<(String, Instant)>` 3초 타임아웃, `make_app()` 헬퍼 업데이트 |
+| `src/main.rs` | `mod export;` 등록 |
+| `Cargo.toml` | `chrono = { version = "0.4", features = ["clock"] }` 추가; `[package.metadata.bundle]` 섹션 추가 |
+| `assets/icon.png` | 16×16 유효 PNG (PNG 시그니처 검증 완료, 78 bytes, steel-blue 단색) |
+| `scripts/package.sh` | macOS `.app`+`.dmg` 패키징 스크립트 (cargo bundle → dylib 복사 → install_name_tool → hdiutil); chmod +x 설정 |
+| `README.md` | 프로젝트 개요, 사전 요구사항, 빌드 방법, 타입 매핑 표, 사용 가이드, C# Export 예시, 패키징 안내, snap7 배치 안내 |
+
+### 테스트 결과
+```
+cargo build  → 0 errors, 7 warnings (dead_code: scaffold 단계 정상)
+cargo test   → 71 passed, 0 failed
+
+  - app:                 13 tests (Step 4 유지)
+  - config:               3 tests (Step 4 유지)
+  - export::csharp:      15 tests (신규: 타입별 키워드 × 8, Bool bit 주석, String N바이트/offset/헬퍼/byte_names, DB번호 헤더, 빈 목록 스켈레톤, 클래스명)
+  - model::variable:     10 tests (Step 1 유지)
+  - plc::client:          5 tests (Step 1 유지)
+  - plc::mock_data:       5 tests (Step 2 유지)
+  - plc::parser:         11 tests (Step 2 유지)
+  - plc::poller:          6 tests (Step 2 유지)
+  - state:                3 tests (Step 2 유지)
+```
+
+### 설계 결정
+- **String 헬퍼 프로퍼티**: `public string name =>` expression body 형태로 생성 — snap7dotnet ReadClass 패턴에서 개별 byte 프로퍼티를 먼저 읽은 뒤 helper로 조합하는 방식
+- **export_status 타임아웃**: `Option<(String, Instant)>` + `elapsed() < 3s` 패턴; `render_toolbar()` 진입 때마다 만료 여부 확인 후 None으로 클리어 — 별도 타이머 없이 egui 리페인트 주기에서 처리
+- **아이콘 PNG**: 외부 이미지 크레이트 없이 Python3 (macOS 내장) 으로 zlib 압축 + PNG 청크 직접 생성; 실배포 시 512×512 PNG 교체 안내를 scripts/package.sh 주석에 명시
+- **cargo-bundle 메타데이터**: `[package.metadata.bundle]` 섹션을 Cargo.toml에 추가 — cargo-bundle이 이 섹션을 읽어 .app 패키징 수행; 빌드에 영향 없음
+- **chrono 의존성**: `features = ["clock"]`만 활성화해 `Local::now()` 사용 — 타임존/날짜 파싱 피처 불필요
 
 ---
 

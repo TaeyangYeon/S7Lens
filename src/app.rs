@@ -38,6 +38,10 @@ pub struct PlcMonitorApp {
     config_status: String,
     /// Draft string for the poll interval text input.
     poll_ms_draft: String,
+    /// Destination path for C# class export.
+    export_path: String,
+    /// Status message from the last export attempt, cleared after 3 s.
+    export_status: Option<(String, std::time::Instant)>,
 }
 
 impl PlcMonitorApp {
@@ -50,6 +54,8 @@ impl PlcMonitorApp {
             config_path: "config.json".to_string(),
             config_status: String::new(),
             poll_ms_draft: poll_ms.to_string(),
+            export_path: "output.cs".to_string(),
+            export_status: None,
         }
     }
 
@@ -332,11 +338,10 @@ impl PlcMonitorApp {
     }
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
+        // Config save / load row
         ui.horizontal(|ui| {
             ui.label("Config file:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config_path).desired_width(200.0),
-            );
+            ui.add(egui::TextEdit::singleline(&mut self.config_path).desired_width(200.0));
 
             if ui.button("💾 Save Config").clicked() {
                 let cfg_opt = self.state.lock().ok().map(|s| ConfigFile {
@@ -379,14 +384,68 @@ impl PlcMonitorApp {
                     }
                 }
             }
-
-            if ui.button("📤 Export C# Class").clicked() {
-                println!("export");
-            }
         });
 
         if !self.config_status.is_empty() {
             ui.label(&self.config_status);
+        }
+
+        // C# export row
+        ui.horizontal(|ui| {
+            ui.label("Export file:");
+            ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(200.0));
+
+            if ui.button("📤 Export C# Class").clicked() {
+                let snapshot = self
+                    .state
+                    .lock()
+                    .ok()
+                    .map(|s| (s.config.clone(), s.var_defs.clone()));
+                match snapshot {
+                    Some((config, var_defs)) => {
+                        let cs = crate::export::csharp::generate_csharp(&config, &var_defs);
+                        let path = std::path::Path::new(&self.export_path);
+                        match std::fs::write(path, cs) {
+                            Ok(()) => {
+                                self.export_status = Some((
+                                    format!("Exported to {}", self.export_path),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                            Err(e) => {
+                                self.export_status = Some((
+                                    format!("Export error: {}", e),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        self.export_status = Some((
+                            "State lock failed".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
+            }
+        });
+
+        // Show export status for up to 3 seconds
+        let export_msg: Option<String> = match &self.export_status {
+            Some((msg, instant)) => {
+                if instant.elapsed() < std::time::Duration::from_secs(3) {
+                    Some(msg.clone())
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+        if self.export_status.is_some() && export_msg.is_none() {
+            self.export_status = None;
+        }
+        if let Some(msg) = export_msg {
+            ui.label(&msg);
         }
     }
 }
@@ -401,6 +460,10 @@ impl eframe::App for PlcMonitorApp {
             .map(|s| s.var_defs.iter().any(|d| matches!(d.var_type, VarType::Bool)))
             .unwrap_or(false);
         if has_bool {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        // Keep repainting while a timed status message is visible
+        if self.export_status.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
 
@@ -519,6 +582,8 @@ mod tests {
             config_path: "config.json".to_string(),
             config_status: String::new(),
             poll_ms_draft: poll_ms.to_string(),
+            export_path: "output.cs".to_string(),
+            export_status: None,
         }
     }
 

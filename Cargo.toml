@@ -9,5 +9,12 @@ eframe = { version = "0.29", features = ["default"] }
 egui_extras = { version = "0.29", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = { version = "0.4", features = ["clock"] }
 
 [build-dependencies]
+
+[package.metadata.bundle]
+name = "SiemensPLCMonitor"
+identifier = "com.plcmonitor.siemens-plc-monitor"
+version = "0.1.0"
+icon = ["assets/icon.png"]
