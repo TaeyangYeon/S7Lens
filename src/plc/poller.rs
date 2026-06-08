@@ -13,9 +13,12 @@ use crate::state::{ConnectionStatus, LiveVar, SharedState};
 /// Lock is held only for the minimum duration — never across FFI calls or sleeps.
 pub fn spawn_poller(state: Arc<Mutex<SharedState>>) -> JoinHandle<()> {
     thread::spawn(move || {
-        #[cfg(test)]
+        // Use the real FFI client only when snap7 dylib was detected at build time.
+        // Without the dylib, `-Wl,-undefined,dynamic_lookup` defers symbol resolution
+        // to runtime; calling Cli_Create() would crash immediately, so fall back to mock.
+        #[cfg(any(test, not(snap7_available)))]
         let mut client = PlcClient::new_mock();
-        #[cfg(not(test))]
+        #[cfg(all(not(test), snap7_available))]
         let mut client = PlcClient::new();
 
         let mut error_count: u32 = 0;

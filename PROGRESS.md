@@ -1,6 +1,6 @@
 # Siemens PLC Monitor — Progress
 
-## 현재 진행 단계: Step 2 완료
+## 현재 진행 단계: Step 3 완료
 
 ## Phase 1: 프로젝트 초기화 + 데이터 모델
 - [x] Step 1: Cargo 초기화 + 핵심 데이터 모델 + snap7 FFI 골격
@@ -9,7 +9,7 @@
 - [x] Step 2: 폴링 스레드 + 파싱 엔진
 
 ## Phase 3: egui UI — Connection + Variable Definition
-- [ ] Step 3: egui 앱 뼈대 + Connection 패널 + Variable Definition 패널
+- [x] Step 3: egui 앱 뼈대 + Connection 패널 + Variable Definition 패널
 
 ## Phase 4: Live Monitor + 설정 저장/불러오기
 - [ ] Step 4: Live Monitor 실시간 표시 + blink 애니메이션 + 설정 JSON
@@ -20,6 +20,54 @@
 ---
 
 <!-- 완료된 Step의 내역은 아래에 역순으로 기록 (최신이 위) -->
+
+---
+
+## Step 3 완료 기록 — 2026-06-08
+
+### 생성/수정된 파일
+| 경로 | 내용 |
+|------|------|
+| `Cargo.toml` | `egui_extras = "0.29"` 추가 |
+| `src/app.rs` | `PlcMonitorApp`, Connection 패널, Variable Definition 패널, Bottom toolbar, 3개 테스트 |
+| `src/main.rs` | `eframe::run_native` 진입점, 900×700 창, poller 스레드 연결 |
+
+### 테스트 결과
+```
+cargo build  → 0 errors, 6 warnings (dead_code: scaffold 단계 정상)
+cargo test   → 43 passed, 0 failed
+  - app:                  3 tests (신규: default_inputs, add_remove_var_def, status_display)
+  - model::variable:     10 tests (Step 1 유지)
+  - plc::client:          5 tests (Step 1 유지)
+  - plc::mock_data:       5 tests (Step 2 유지)
+  - plc::parser:         11 tests (Step 2 유지)
+  - plc::poller:          6 tests (Step 2 유지)
+  - state:                3 tests (Step 2 유지)
+```
+
+### 설계 결정
+- **Draft 입력 분리**: `ConnectionDraft` 구조체를 `PlcMonitorApp`에 보유 — `SharedState` 오염 방지; [Connect] 클릭 시에만 커밋
+- **뮤텍스 최소 보유**: 테이블 렌더링 전 `var_defs` 클론 → 변경 수집 → 단일 락으로 적용
+- **kind_to_var_type**: String 선택 시 기존 length 보존, 신규 선택 시 기본값 32
+
+### 이슈 해결 — cargo run 즉시 세그멘테이션 폴트
+
+**증상**: `cargo build` 0 에러, `cargo run` → 창 열리지 않고 즉시 SIGSEGV (exit 139)
+
+**원인 1 — egui_extras 이미지 기능**: `egui_extras = "0.29"` 기본 피처에 `image` 크레이트 관련 초기화 코드 포함 → macOS 시스템 라이브러리 없이 실행 시 충돌.
+**수정**: `egui_extras = { version = "0.29", default-features = false }` (TableBuilder는 피처 없이 항상 제공됨)
+
+**원인 2 — `Cli_Create()` FFI 호출 (주요 원인)**: `cargo run` (비테스트 빌드) 시 `poller.rs`의 `#[cfg(not(test))]` 분기로 `PlcClient::new()` 호출 → `Cli_Create()` FFI 심볼 런타임 해석 시도. `build.rs`가 `-Wl,-undefined,dynamic_lookup`으로 링크를 허용해 바이너리는 만들어지지만, 실행 시 `libsnap7.dylib` 부재로 심볼 해석 실패 → 즉시 크래시.
+
+**수정**:
+- `build.rs`: `snap7_available` 커스텀 cfg 플래그를 dylib 존재 여부로 조건부 발행 (`cargo::rustc-check-cfg=cfg(snap7_available)` 선언 포함)
+- `poller.rs`: `#[cfg(any(test, not(snap7_available)))]` → `new_mock()`, `#[cfg(all(not(test), snap7_available))]` → `new()` 로 분기 — dylib 없을 때 FFI 심볼을 절대 호출하지 않음
+
+**수정된 파일**: `build.rs`, `src/plc/poller.rs`, `Cargo.toml`
+
+**검증**: `cargo build` 0 에러 · `cargo run` 창 정상 표시 (6초 생존 확인) · `cargo test` 43 passed
+- **status_display 헬퍼**: `ConnectionStatus` → `String` 변환 순수 함수로 분리 → 단위 테스트 가능
+- **[Connect] 시 Connecting 상태**: 폴러 스레드가 실제 연결 완료 후 Connected로 전환 (Step 4에서 완성)
 
 ---
 

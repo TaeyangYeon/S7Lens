@@ -1,6 +1,9 @@
 use std::path::Path;
 
 fn main() {
+    // Declare the custom cfg key so rustc does not warn about unexpected_cfgs.
+    println!("cargo::rustc-check-cfg=cfg(snap7_available)");
+
     // In test builds, skip snap7 link directives entirely — tests use PlcClient::new_mock().
     if std::env::var("CARGO_CFG_TEST").is_ok() {
         return;
@@ -11,24 +14,35 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lib_dir);
 
+    // Detect whether the snap7 native library is present for this platform.
+    // Emits `snap7_available` cfg so poller.rs can select mock vs real client
+    // at compile time — preventing FFI calls when the dylib is absent at runtime.
+    let snap7_exists = match target_os.as_str() {
+        "macos" => Path::new(&format!("{}/libsnap7.dylib", lib_dir)).exists(),
+        "windows" => Path::new(&format!("{}/snap7.lib", lib_dir)).exists(),
+        _ => Path::new(&format!("{}/libsnap7.so", lib_dir)).exists(),
+    };
+
+    if snap7_exists {
+        println!("cargo:rustc-cfg=snap7_available");
+    }
+
     if target_os == "macos" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
         // Allow linking without libsnap7.dylib present during development.
-        // Undefined snap7 symbols are resolved at runtime; all call sites are
-        // guarded by mock_mode so they are never reached in mock builds.
+        // Undefined snap7 symbols are never reached when snap7_available is unset
+        // (poller uses PlcClient::new_mock() in that case).
         println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
 
-        // Only request explicit library linking when the dylib is actually present.
-        if Path::new(&format!("{}/libsnap7.dylib", lib_dir)).exists() {
+        if snap7_exists {
             println!("cargo:rustc-link-lib=dylib=snap7");
         }
     } else if target_os == "windows" {
-        if Path::new(&format!("{}/snap7.lib", lib_dir)).exists() {
+        if snap7_exists {
             println!("cargo:rustc-link-lib=snap7");
         }
     } else {
-        // Linux and others
-        if Path::new(&format!("{}/libsnap7.so", lib_dir)).exists() {
+        if snap7_exists {
             println!("cargo:rustc-link-lib=snap7");
         }
     }
