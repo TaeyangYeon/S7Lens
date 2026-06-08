@@ -9,9 +9,23 @@ fn main() {
         return;
     }
 
+    let target = std::env::var("TARGET").unwrap_or_default();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let lib_dir = "libs/snap7";
 
+    // Windows cross-compilation via mingw: import library lives in libs/snap7/win64/
+    if target == "x86_64-pc-windows-gnu" {
+        let win64_dir = "libs/snap7/win64";
+        println!("cargo:rustc-link-search=native={}", win64_dir);
+        // Emit snap7_available only when the import library is present.
+        if Path::new(&format!("{}/libsnap7.a", win64_dir)).exists() {
+            println!("cargo:rustc-cfg=snap7_available");
+            println!("cargo:rustc-link-lib=snap7");
+        }
+        // Do NOT emit -Wl,-undefined,dynamic_lookup (macOS-only flag).
+        return;
+    }
+
+    let lib_dir = "libs/snap7";
     println!("cargo:rustc-link-search=native={}", lib_dir);
 
     // Detect whether the snap7 native library is present for this platform.
@@ -41,9 +55,7 @@ fn main() {
         if snap7_exists {
             println!("cargo:rustc-link-lib=snap7");
         }
-    } else {
-        if snap7_exists {
-            println!("cargo:rustc-link-lib=snap7");
-        }
+    } else if snap7_exists {
+        println!("cargo:rustc-link-lib=snap7");
     }
 }

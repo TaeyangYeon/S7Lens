@@ -6,8 +6,11 @@ use crate::model::session::ConnectionConfig;
 pub const S7_AREA_DB: i32 = 0x84;
 pub const S7_WL_BYTE: i32 = 0x02;
 
-// FFI declarations are excluded from test builds; all test paths go through mock_mode.
-#[cfg(not(test))]
+// FFI declarations are only compiled when snap7 is present AND we are not in a test build.
+// Without snap7_available, all paths use mock_mode — FFI symbols must never be referenced
+// because the Windows linker (mingw) resolves symbols at link time (unlike macOS which
+// defers with -Wl,-undefined,dynamic_lookup).
+#[cfg(all(not(test), snap7_available))]
 extern "C" {
     fn Cli_Create() -> *mut c_void;
     fn Cli_Destroy(client: *mut *mut c_void) -> c_int;
@@ -46,11 +49,11 @@ unsafe impl Send for PlcClient {}
 impl PlcClient {
     /// Create a real snap7 client backed by the native library.
     pub fn new() -> Self {
-        #[cfg(not(test))]
+        #[cfg(all(not(test), snap7_available))]
         let handle = unsafe { Cli_Create() };
-        // In test builds the extern block is excluded; produce a null handle so
-        // the struct is valid — tests must use new_mock() anyway.
-        #[cfg(test)]
+        // When snap7 is absent or in test builds, produce a null handle; callers
+        // that actually reach this path use new_mock() instead.
+        #[cfg(any(test, not(snap7_available)))]
         let handle = std::ptr::null_mut();
 
         Self { handle, mock_mode: false }
@@ -96,9 +99,9 @@ impl PlcClient {
         self.is_connected_native()
     }
 
-    // ── native helpers (excluded from test builds) ──────────────────────────
+    // ── native helpers (only compiled when snap7 library is present) ─────────
 
-    #[cfg(not(test))]
+    #[cfg(all(not(test), snap7_available))]
     fn connect_native(&mut self, config: &ConnectionConfig) -> Result<(), String> {
         let ip = std::ffi::CString::new(config.ip.as_str())
             .map_err(|e| format!("invalid IP address string: {}", e))?;
@@ -120,22 +123,21 @@ impl PlcClient {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, not(snap7_available)))]
     fn connect_native(&mut self, _config: &ConnectionConfig) -> Result<(), String> {
-        // Unreachable in tests because connect() short-circuits on mock_mode.
-        Err("connect_native called in test build without mock_mode".into())
+        Err("connect_native called without snap7 or in test build".into())
     }
 
-    #[cfg(not(test))]
+    #[cfg(all(not(test), snap7_available))]
     fn disconnect_native(&mut self) {
         // SAFETY: handle is non-null and owned by self.
         unsafe { Cli_Disconnect(self.handle) };
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, not(snap7_available)))]
     fn disconnect_native(&mut self) {}
 
-    #[cfg(not(test))]
+    #[cfg(all(not(test), snap7_available))]
     fn read_db_native(&self, db_number: i32, size: usize) -> Result<Vec<u8>, String> {
         let mut buf = vec![0u8; size];
         // SAFETY: handle is non-null; buf is exclusively owned for the duration.
@@ -157,12 +159,12 @@ impl PlcClient {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, not(snap7_available)))]
     fn read_db_native(&self, _db_number: i32, _size: usize) -> Result<Vec<u8>, String> {
-        Err("read_db_native called in test build without mock_mode".into())
+        Err("read_db_native called without snap7 or in test build".into())
     }
 
-    #[cfg(not(test))]
+    #[cfg(all(not(test), snap7_available))]
     fn is_connected_native(&self) -> bool {
         let mut connected: c_int = 0;
         // SAFETY: handle is non-null; connected is a stack variable.
@@ -170,7 +172,7 @@ impl PlcClient {
         rc == 0 && connected != 0
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, not(snap7_available)))]
     fn is_connected_native(&self) -> bool {
         false
     }
@@ -181,7 +183,7 @@ impl Drop for PlcClient {
         if self.mock_mode || self.handle.is_null() {
             return;
         }
-        #[cfg(not(test))]
+        #[cfg(all(not(test), snap7_available))]
         // SAFETY: handle was created by Cli_Create; passing &mut handle lets snap7 zero it.
         unsafe { Cli_Destroy(&mut self.handle) };
     }

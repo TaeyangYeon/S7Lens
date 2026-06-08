@@ -1,6 +1,8 @@
 # Siemens PLC Monitor
 
-A Rust + egui desktop application for real-time monitoring of Siemens S7 PLC data blocks (DBs), with live variable display, JSON configuration persistence, C# class export, and macOS `.app`/`.dmg` packaging. Built on top of the [snap7](http://snap7.sourceforge.net/) open-source library for S7 communication.
+A Rust + egui desktop application for real-time monitoring of Siemens S7 PLC data blocks (DBs), with live variable display, JSON configuration persistence, and C# class export. Built on top of the [snap7](http://snap7.sourceforge.net/) open-source library for S7 communication.
+
+**Target platform: Windows x86_64.** Built by cross-compiling from macOS (Intel x86_64) using the `x86_64-pc-windows-gnu` toolchain.
 
 ---
 
@@ -9,67 +11,91 @@ A Rust + egui desktop application for real-time monitoring of Siemens S7 PLC dat
 | Tool | How to get |
 |------|-----------|
 | Rust toolchain (stable, 2021 edition) | `curl https://sh.rustup.rs -sSf \| sh` |
-| `cargo-bundle` (for macOS packaging) | `cargo install cargo-bundle` |
-| snap7 shared library | See **snap7 Library Note** below |
+| mingw-w64 cross-compiler | `brew install mingw-w64` |
+| p7zip (to extract snap7 archive) | `brew install p7zip` |
+| `snap7-full-1.4.2.7z` | Download from <http://snap7.sourceforge.net/> and place in the project root |
 
 ---
 
-## snap7 Library Note
+## Windows Build
 
-The app links against `libsnap7.dylib` at runtime. Place the compiled dylib at:
-
-```
-libs/snap7/libsnap7.dylib
-```
-
-You can build snap7 from source (<http://snap7.sourceforge.net/>) or obtain a pre-built binary for your platform. Without the dylib present, the app still builds and runs using mock PLC data (controlled by the `snap7_available` cfg flag in `build.rs`).
-
----
-
-## Build & Run
+Run the build script from the project root:
 
 ```bash
-# Build (debug)
-cargo build
+bash scripts/build-windows.sh
+```
 
-# Run all unit tests
-cargo test
+The script:
+1. Installs the `x86_64-pc-windows-gnu` Rust target via `rustup target add`
+2. Checks that `x86_64-w64-mingw32-gcc` is available
+3. Extracts `snap7.dll` and `snap7.def` from `snap7-full-1.4.2.7z`
+4. Generates `libs/snap7/win64/libsnap7.a` (the mingw import library) via `dlltool`
+5. Runs `cargo build --release --target x86_64-pc-windows-gnu`
 
-# Run the GUI application
-cargo run
+**Output files:**
+
+| File | Location |
+|------|----------|
+| `siemens-plc-monitor.exe` | `target/x86_64-pc-windows-gnu/release/` |
+| `snap7.dll` | `libs/snap7/win64/` |
+
+---
+
+## Deployment on Windows
+
+Copy both files to the same folder on the target Windows machine:
+
+```
+SiemensPLCMonitor\
+├── siemens-plc-monitor.exe
+└── snap7.dll
+```
+
+Double-click `siemens-plc-monitor.exe` to run. No installer required.
+
+---
+
+## Development Build (macOS, mock PLC)
+
+Without `libs/snap7/libsnap7.dylib` present, the app builds and runs with simulated PLC data (controlled by the `snap7_available` cfg flag in `build.rs`):
+
+```bash
+cargo build    # debug build
+cargo run      # run with mock data
+cargo test     # run all unit tests
 ```
 
 ---
 
 ## Variable Type Mapping
 
-| Rust `VarType`     | Siemens type | C# type   | Size (bytes) |
-|--------------------|--------------|-----------|--------------|
-| `Bool`             | BOOL         | `bool`    | 1 (1 bit)    |
-| `Byte`             | BYTE         | `byte`    | 1            |
-| `Word`             | WORD         | `ushort`  | 2            |
-| `Int`              | INT          | `short`   | 2            |
-| `DWord`            | DWORD        | `uint`    | 4            |
-| `DInt`             | DINT         | `int`     | 4            |
-| `Real`             | REAL         | `float`   | 4            |
-| `String { length }`| STRING[n]    | `string`  | n (n bytes)  |
+| Rust `VarType`      | Siemens type | C# type   | Size (bytes) |
+|---------------------|--------------|-----------|--------------|
+| `Bool`              | BOOL         | `bool`    | 1 (1 bit)    |
+| `Byte`              | BYTE         | `byte`    | 1            |
+| `Word`              | WORD         | `ushort`  | 2            |
+| `Int`               | INT          | `short`   | 2            |
+| `DWord`             | DWORD        | `uint`    | 4            |
+| `DInt`              | DINT         | `int`     | 4            |
+| `Real`              | REAL         | `float`   | 4            |
+| `String { length }` | STRING[n]    | `string`  | n (n bytes)  |
 
 ---
 
 ## Usage Guide
 
-1. **Connection panel** — Enter the PLC IP address, rack, slot, and DB number, then click **Connect**.  
-2. **Variable Definitions panel** — Add rows for each DB variable: set the name, type, byte offset, bit offset (Bool only), and string length (String only). Use **+ Add Row** and **✕** to manage the list.  
-3. **Live Monitor panel** — Click **▶ Start** to begin polling. Values update on the configured interval (default 100 ms). Bool variables blink green/grey while `TRUE`/`FALSE`. Click **■ Stop** to pause polling.  
-4. **Toolbar**  
-   - *Config file* — type a path and use **💾 Save Config** / **📂 Load Config** to persist the connection and variable definitions as JSON.  
+1. **Connection panel** — Enter the PLC IP address, rack, slot, and DB number, then click **Connect**.
+2. **Variable Definitions panel** — Add rows for each DB variable: set the name, type, byte offset, bit offset (Bool only), and string length (String only). Use **+ Add Row** and **✕** to manage the list.
+3. **Live Monitor panel** — Click **▶ Start** to begin polling. Values update at the configured interval (default 100 ms). Bool variables blink green/grey while `TRUE`/`FALSE`. Click **■ Stop** to pause.
+4. **Toolbar**
+   - *Config file* — type a path and use **💾 Save Config** / **📂 Load Config** to persist the connection and variable definitions as JSON.
    - *Export file* — type a `.cs` output path and click **📤 Export C# Class** to generate a C# data class for the current DB layout.
 
 ---
 
 ## C# Export Example
 
-Given a DB with a Bool flag at byte 0, bit 3, and a String of length 4 starting at byte 2, the export produces:
+Given DB 100 with a Bool flag at byte 0 bit 3, and a String of length 4 starting at byte 2, the export produces:
 
 ```csharp
 // Auto-generated by Siemens PLC Monitor
@@ -87,19 +113,4 @@ public class DB100 {
 }
 ```
 
----
-
-## Packaging (macOS .app + .dmg)
-
-```bash
-bash scripts/package.sh
-```
-
-This performs four steps:
-
-1. `cargo bundle --release` — compiles a release binary and wraps it in a `.app` bundle.  
-2. Copies `libs/snap7/libsnap7.dylib` into `SiemensPLCMonitor.app/Contents/Frameworks/`.  
-3. Patches the binary's rpath with `install_name_tool` so it finds the dylib at runtime.  
-4. Creates `dist/SiemensPLCMonitor.dmg` with `hdiutil`.
-
-> **Icon note**: `assets/icon.png` is a 16×16 placeholder. Replace it with a real 512×512 PNG before distribution, then re-run `cargo bundle`.
+Use with `snap7dotnet` `ReadClass<T>` to map the DB block directly onto the generated class.

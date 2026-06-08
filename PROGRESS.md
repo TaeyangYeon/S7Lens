@@ -33,32 +33,37 @@
 | `src/app.rs` | Export 행 추가 (`export_path` TextEdit + `📤 Export C# Class` 버튼), `export_status: Option<(String, Instant)>` 3초 타임아웃, `make_app()` 헬퍼 업데이트 |
 | `src/main.rs` | `mod export;` 등록 |
 | `Cargo.toml` | `chrono = { version = "0.4", features = ["clock"] }` 추가; `[package.metadata.bundle]` 섹션 추가 |
-| `assets/icon.png` | 16×16 유효 PNG (PNG 시그니처 검증 완료, 78 bytes, steel-blue 단색) |
-| `scripts/package.sh` | macOS `.app`+`.dmg` 패키징 스크립트 (cargo bundle → dylib 복사 → install_name_tool → hdiutil); chmod +x 설정 |
-| `README.md` | 프로젝트 개요, 사전 요구사항, 빌드 방법, 타입 매핑 표, 사용 가이드, C# Export 예시, 패키징 안내, snap7 배치 안내 |
+| `build.rs` | Windows cross-compile 분기 추가 (`x86_64-pc-windows-gnu` 감지 → `libs/snap7/win64` 검색 경로 + `libsnap7.a` 존재 시 `snap7_available` 발행); `-Wl,-undefined,dynamic_lookup` Windows 미발행 |
+| `src/plc/client.rs` | `extern "C"` 블록 및 모든 native helper를 `#[cfg(not(test))]` → `#[cfg(all(not(test), snap7_available))]`로 변경; `#[cfg(any(test, not(snap7_available)))]` stub 추가 — Windows mingw 링크타임 심볼 해석 오류 수정 |
+| `.cargo/config.toml` | `[target.x86_64-pc-windows-gnu] linker = "x86_64-w64-mingw32-gcc"` |
+| `scripts/build-windows.sh` | rustup target add → mingw 확인 → 7z 추출 → dlltool → cargo build 자동화; chmod +x |
+| `README.md` | Windows 빌드 중심으로 재작성: 사전 요구사항(mingw-w64, p7zip, snap7 7z), 빌드 방법, 배포(exe+dll 동일 폴더), 타입 매핑 표, 사용 가이드, C# Export 예시 |
 
 ### 테스트 결과
 ```
-cargo build  → 0 errors, 7 warnings (dead_code: scaffold 단계 정상)
-cargo test   → 71 passed, 0 failed
+cargo build (macOS)                     → 0 errors, 7 warnings
+cargo build --release --target          → 0 errors, 7 warnings
+  x86_64-pc-windows-gnu (mock mode)       EXE: 13 MB
+cargo test                              → 71 passed, 0 failed
 
-  - app:                 13 tests (Step 4 유지)
-  - config:               3 tests (Step 4 유지)
-  - export::csharp:      15 tests (신규: 타입별 키워드 × 8, Bool bit 주석, String N바이트/offset/헬퍼/byte_names, DB번호 헤더, 빈 목록 스켈레톤, 클래스명)
-  - model::variable:     10 tests (Step 1 유지)
-  - plc::client:          5 tests (Step 1 유지)
-  - plc::mock_data:       5 tests (Step 2 유지)
-  - plc::parser:         11 tests (Step 2 유지)
-  - plc::poller:          6 tests (Step 2 유지)
-  - state:                3 tests (Step 2 유지)
+  - app:                 13 tests
+  - config:               3 tests
+  - export::csharp:      15 tests
+  - model::variable:     10 tests
+  - plc::client:          5 tests
+  - plc::mock_data:       5 tests
+  - plc::parser:         11 tests
+  - plc::poller:          6 tests
+  - state:                3 tests
 ```
 
 ### 설계 결정
-- **String 헬퍼 프로퍼티**: `public string name =>` expression body 형태로 생성 — snap7dotnet ReadClass 패턴에서 개별 byte 프로퍼티를 먼저 읽은 뒤 helper로 조합하는 방식
-- **export_status 타임아웃**: `Option<(String, Instant)>` + `elapsed() < 3s` 패턴; `render_toolbar()` 진입 때마다 만료 여부 확인 후 None으로 클리어 — 별도 타이머 없이 egui 리페인트 주기에서 처리
-- **아이콘 PNG**: 외부 이미지 크레이트 없이 Python3 (macOS 내장) 으로 zlib 압축 + PNG 청크 직접 생성; 실배포 시 512×512 PNG 교체 안내를 scripts/package.sh 주석에 명시
-- **cargo-bundle 메타데이터**: `[package.metadata.bundle]` 섹션을 Cargo.toml에 추가 — cargo-bundle이 이 섹션을 읽어 .app 패키징 수행; 빌드에 영향 없음
-- **chrono 의존성**: `features = ["clock"]`만 활성화해 `Local::now()` 사용 — 타임존/날짜 파싱 피처 불필요
+- **Windows 크로스 컴파일**: `x86_64-pc-windows-gnu` 타깃 + `mingw-w64` 링커. snap7 import library (`libsnap7.a`)는 `dlltool`로 `snap7.def`에서 생성 — `scripts/build-windows.sh`가 전체 과정 자동화
+- **snap7_available cfg 확장**: 기존 macOS (`libs/snap7/libsnap7.dylib` 존재 여부)에 Windows (`libs/snap7/win64/libsnap7.a` 존재 여부) 조건 추가. `build.rs`에서 TARGET 환경변수로 `x86_64-pc-windows-gnu` 감지 후 early-return
+- **FFI cfg 수정 (핵심 버그 수정)**: macOS는 `-Wl,-undefined,dynamic_lookup`으로 미정의 심볼을 런타임까지 유예하지만 Windows mingw 링커는 링크타임에 반드시 해석. `extern "C"` 블록과 모든 native helper를 `#[cfg(all(not(test), snap7_available))]`로 이중 게이팅 → snap7 없을 때 FFI 심볼 참조 자체를 제거
+- **Mock 모드 빌드 검증**: `libs/snap7/win64/libsnap7.a` 없이도 `--target x86_64-pc-windows-gnu`가 성공 (poller가 `new_mock()` 분기). 실제 PLC 연결은 snap7.dll + libsnap7.a 배치 후 재빌드하면 활성화
+- **String 헬퍼 프로퍼티**: `public string name =>` expression body 형태로 생성 — snap7dotnet ReadClass 패턴에서 개별 byte 프로퍼티를 먼저 읽은 뒤 helper로 조합
+- **export_status 타임아웃**: `Option<(String, Instant)>` + `elapsed() < 3s`; `render_toolbar()` 진입 시 만료 확인 후 None 클리어
 
 ---
 
