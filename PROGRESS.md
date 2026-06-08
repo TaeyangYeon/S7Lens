@@ -1,6 +1,6 @@
 # Siemens PLC Monitor — Progress
 
-## 현재 진행 단계: Step 3 완료
+## 현재 진행 단계: Step 4 완료
 
 ## Phase 1: 프로젝트 초기화 + 데이터 모델
 - [x] Step 1: Cargo 초기화 + 핵심 데이터 모델 + snap7 FFI 골격
@@ -12,7 +12,7 @@
 - [x] Step 3: egui 앱 뼈대 + Connection 패널 + Variable Definition 패널
 
 ## Phase 4: Live Monitor + 설정 저장/불러오기
-- [ ] Step 4: Live Monitor 실시간 표시 + blink 애니메이션 + 설정 JSON
+- [x] Step 4: Live Monitor 실시간 표시 + blink 애니메이션 + 설정 JSON
 
 ## Phase 5: C# Export + 최종 통합
 - [ ] Step 5: C# 클래스 Export + 빌드 검증 + README
@@ -20,6 +20,39 @@
 ---
 
 <!-- 완료된 Step의 내역은 아래에 역순으로 기록 (최신이 위) -->
+
+---
+
+## Step 4 완료 기록 — 2026-06-08
+
+### 생성/수정된 파일
+| 경로 | 내용 |
+|------|------|
+| `src/config.rs` | `ConfigFile` 구조체, `save_config`, `load_config`, round-trip 포함 3개 테스트 |
+| `src/app.rs` | Live Monitor 패널 (Name/Type/Value 테이블), 폴링 Start/Stop 버튼, Poll ms 입력, Config Save/Load 버튼 + 경로 입력, `format_var_value` 순수 함수, blink repaint 로직, 10개 format 테스트 추가 |
+| `src/main.rs` | `mod config;` 등록 |
+
+### 테스트 결과
+```
+cargo build  → 0 errors, 7 warnings (dead_code: scaffold 단계 정상)
+cargo test   → 56 passed, 0 failed
+  - app:                 13 tests (기존 3 유지 + format_var_value 10 신규)
+  - config:               3 tests (신규: round_trip, missing_file, save_creates)
+  - model::variable:     10 tests (Step 1 유지)
+  - plc::client:          5 tests (Step 1 유지)
+  - plc::mock_data:       5 tests (Step 2 유지)
+  - plc::parser:         11 tests (Step 2 유지)
+  - plc::poller:          6 tests (Step 2 유지)
+  - state:                3 tests (Step 2 유지)
+```
+
+### 설계 결정
+- **폴링 active 플래그**: `SharedState.polling_active` / `poll_interval_ms` 는 Step 2~3에서 이미 구현 — Step 4에서 ▶ Start / ■ Stop 버튼으로 UI 연결
+- **config path 입력 방식**: `rfd` 파일 다이얼로그 대신 `config_path: String` 필드 + `TextEdit` — 의존성 추가 없이 단순하게 처리
+- **blink repaint 전략**: `update()` 진입 시 `var_defs`에 Bool 타입이 있으면 `ctx.request_repaint_after(Duration::from_millis(500))` 호출 — 폴러가 500ms 이내로 `blink_on`을 토글하므로 시각적 깜박임 구현
+- **format_var_value 분리**: 색상 없는 순수 텍스트 반환 함수로 추출 → 단위 테스트 가능; Bool 색상은 render 함수에서 별도 적용
+- **Lock 최소 보유**: Live Monitor 테이블 렌더링 전 `var_defs`, `live_vals`, `status` 를 한 번의 짧은 락으로 클론 → 락 없이 렌더링
+- **poll_ms 동기화**: Poll ms 입력 `lost_focus()` 시 `s.poll_interval_ms` 와 `s.config.poll_interval_ms` 모두 업데이트 — 폴러와 Config 저장 양쪽 일치
 
 ---
 

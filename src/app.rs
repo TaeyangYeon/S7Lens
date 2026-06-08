@@ -1,9 +1,11 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 
-use crate::model::variable::{VarDef, VarType};
+use crate::config::{load_config, save_config, ConfigFile};
+use crate::model::variable::{VarDef, VarType, VarValue};
 use crate::state::{ConnectionStatus, SharedState};
 
 /// Draft UI state for the connection panel — lives on the app struct, not SharedState.
@@ -30,12 +32,25 @@ impl ConnectionDraft {
 pub struct PlcMonitorApp {
     state: Arc<Mutex<SharedState>>,
     draft: ConnectionDraft,
+    /// File path shown in the config save/load input.
+    config_path: String,
+    /// One-line status message shown below the config buttons.
+    config_status: String,
+    /// Draft string for the poll interval text input.
+    poll_ms_draft: String,
 }
 
 impl PlcMonitorApp {
     /// Create a new app, initialising draft inputs from `ConnectionConfig::default()`.
     pub fn new(_cc: &eframe::CreationContext<'_>, state: Arc<Mutex<SharedState>>) -> Self {
-        Self { state, draft: ConnectionDraft::from_defaults() }
+        let poll_ms = state.lock().map(|s| s.poll_interval_ms).unwrap_or(100);
+        Self {
+            state,
+            draft: ConnectionDraft::from_defaults(),
+            config_path: "config.json".to_string(),
+            config_status: String::new(),
+            poll_ms_draft: poll_ms.to_string(),
+        }
     }
 
     fn render_connection_panel(&mut self, ui: &mut egui::Ui) {
@@ -149,7 +164,6 @@ impl PlcMonitorApp {
                         });
 
                         row.col(|ui| {
-                            // Determine the "kind" label for the combo box.
                             let selected = type_kind_label(&def_mut.var_type);
                             egui::ComboBox::from_id_salt(format!("type_{}", i))
                                 .selected_text(selected)
@@ -225,23 +239,171 @@ impl PlcMonitorApp {
         }
     }
 
-    fn render_toolbar(&self, ui: &mut egui::Ui) {
+    fn render_live_monitor_panel(&mut self, ui: &mut egui::Ui) {
+        // Poll controls row
         ui.horizontal(|ui| {
+            ui.label("Poll ms:");
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.poll_ms_draft).desired_width(60.0),
+            );
+            if resp.lost_focus() {
+                if let Ok(ms) = self.poll_ms_draft.parse::<u64>() {
+                    if let Ok(mut s) = self.state.lock() {
+                        s.poll_interval_ms = ms;
+                        s.config.poll_interval_ms = ms;
+                    }
+                }
+            }
+
+            if ui.button("▶ Start").clicked() {
+                if let Ok(mut s) = self.state.lock() {
+                    s.polling_active = true;
+                }
+            }
+            if ui.button("■ Stop").clicked() {
+                if let Ok(mut s) = self.state.lock() {
+                    s.polling_active = false;
+                }
+            }
+        });
+
+        // Snapshot var_defs, live values, and status in one short lock.
+        let (var_defs_snap, live_vals, status) = self
+            .state
+            .lock()
+            .map(|s| {
+                let var_defs = s.var_defs.clone();
+                let live_vals: Vec<VarValue> =
+                    s.live_vars.iter().map(|lv| lv.value.clone()).collect();
+                let status = s.status.clone();
+                (var_defs, live_vals, status)
+            })
+            .unwrap_or_else(|_| (Vec::new(), Vec::new(), ConnectionStatus::Disconnected));
+
+        let connected = status == ConnectionStatus::Connected;
+
+        TableBuilder::new(ui)
+            .striped(true)
+            .resizable(false)
+            .column(Column::initial(120.0)) // Name
+            .column(Column::initial(80.0))  // Type
+            .column(Column::remainder())    // Value
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong("Name");
+                });
+                header.col(|ui| {
+                    ui.strong("Type");
+                });
+                header.col(|ui| {
+                    ui.strong("Value");
+                });
+            })
+            .body(|mut body| {
+                for (i, def) in var_defs_snap.iter().enumerate() {
+                    let value_opt = if connected { live_vals.get(i) } else { None };
+                    body.row(22.0, |mut row| {
+                        row.col(|ui| {
+                            ui.label(&def.name);
+                        });
+                        row.col(|ui| {
+                            ui.label(def.var_type.to_string());
+                        });
+                        row.col(|ui| {
+                            match value_opt {
+                                None => {
+                                    ui.label("--");
+                                }
+                                Some(VarValue::Bool { blink_on, .. }) => {
+                                    if *blink_on {
+                                        ui.colored_label(egui::Color32::GREEN, "●TRUE");
+                                    } else {
+                                        ui.colored_label(egui::Color32::GRAY, "○FALSE");
+                                    }
+                                }
+                                Some(v) => {
+                                    ui.label(format_var_value(v));
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+    }
+
+    fn render_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Config file:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config_path).desired_width(200.0),
+            );
+
             if ui.button("💾 Save Config").clicked() {
-                println!("save");
+                let cfg_opt = self.state.lock().ok().map(|s| ConfigFile {
+                    connection: s.config.clone(),
+                    vars: s.var_defs.clone(),
+                });
+                match cfg_opt {
+                    Some(cfg) => {
+                        let path = std::path::Path::new(&self.config_path);
+                        match save_config(path, &cfg) {
+                            Ok(()) => {
+                                self.config_status = format!("Saved to {}", self.config_path);
+                            }
+                            Err(e) => {
+                                self.config_status = format!("Save error: {}", e);
+                            }
+                        }
+                    }
+                    None => {
+                        self.config_status = "State lock failed".to_string();
+                    }
+                }
             }
+
             if ui.button("📂 Load Config").clicked() {
-                println!("load");
+                let path_str = self.config_path.clone();
+                let path = std::path::Path::new(&path_str);
+                match load_config(path) {
+                    Ok(cfg) => {
+                        self.poll_ms_draft = cfg.connection.poll_interval_ms.to_string();
+                        if let Ok(mut s) = self.state.lock() {
+                            s.poll_interval_ms = cfg.connection.poll_interval_ms;
+                            s.config = cfg.connection;
+                            s.var_defs = cfg.vars;
+                        }
+                        self.config_status = format!("Loaded from {}", self.config_path);
+                    }
+                    Err(e) => {
+                        self.config_status = format!("Load error: {}", e);
+                    }
+                }
             }
+
             if ui.button("📤 Export C# Class").clicked() {
                 println!("export");
             }
         });
+
+        if !self.config_status.is_empty() {
+            ui.label(&self.config_status);
+        }
     }
 }
 
 impl eframe::App for PlcMonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Schedule periodic repaints whenever Bool variables are defined,
+        // so the blink_on toggle from the poller thread becomes visible.
+        let has_bool = self
+            .state
+            .lock()
+            .map(|s| s.var_defs.iter().any(|d| matches!(d.var_type, VarType::Bool)))
+            .unwrap_or(false);
+        if has_bool {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::CollapsingHeader::new("🔌 Connection")
                 .default_open(true)
@@ -258,10 +420,37 @@ impl eframe::App for PlcMonitorApp {
                 });
 
             ui.add_space(4.0);
+
+            egui::CollapsingHeader::new("📊 Live Monitor")
+                .default_open(true)
+                .show(ui, |ui| {
+                    self.render_live_monitor_panel(ui);
+                });
+
+            ui.add_space(4.0);
             ui.separator();
 
             self.render_toolbar(ui);
         });
+    }
+}
+
+/// Format a `VarValue` as a display string (no colour information).
+///
+/// For Bool: `blink_on` determines the label — callers apply colour separately.
+pub fn format_var_value(value: &VarValue) -> String {
+    match value {
+        VarValue::Bool { blink_on, .. } => {
+            if *blink_on { "●TRUE".to_string() } else { "○FALSE".to_string() }
+        }
+        VarValue::Byte(v) => v.to_string(),
+        VarValue::Word(v) => format!("0x{:04X}  ({})", v, v),
+        VarValue::Int(v) => v.to_string(),
+        VarValue::DWord(v) => format!("0x{:08X}  ({})", v, v),
+        VarValue::DInt(v) => v.to_string(),
+        VarValue::Real(v) => format!("{:.3}", v),
+        VarValue::StringVal(s) => format!("\"{}\"", s),
+        VarValue::Unknown => "--".to_string(),
     }
 }
 
@@ -317,13 +506,20 @@ pub fn status_display(status: &ConnectionStatus) -> String {
 mod tests {
     use super::*;
     use crate::model::session::ConnectionConfig;
-    use crate::model::variable::{VarDef, VarType};
+    use crate::model::variable::VarDef;
     use crate::state::{ConnectionStatus, SharedState};
     use std::sync::{Arc, Mutex};
 
     fn make_app() -> PlcMonitorApp {
         let state = Arc::new(Mutex::new(SharedState::new()));
-        PlcMonitorApp { state, draft: ConnectionDraft::from_defaults() }
+        let poll_ms = state.lock().map(|s| s.poll_interval_ms).unwrap_or(100);
+        PlcMonitorApp {
+            state,
+            draft: ConnectionDraft::from_defaults(),
+            config_path: "config.json".to_string(),
+            config_status: String::new(),
+            poll_ms_draft: poll_ms.to_string(),
+        }
     }
 
     #[test]
@@ -357,5 +553,64 @@ mod tests {
         assert_eq!(status_display(&ConnectionStatus::Connecting), "⟳ Connecting...");
         assert_eq!(status_display(&ConnectionStatus::Error("timeout".into())), "✗ timeout");
         assert_eq!(status_display(&ConnectionStatus::Disconnected), "○ Disconnected");
+    }
+
+    // --- format_var_value tests ---
+
+    #[test]
+    fn format_bool_blink_on_true() {
+        assert_eq!(format_var_value(&VarValue::Bool { value: true, blink_on: true }), "●TRUE");
+    }
+
+    #[test]
+    fn format_bool_blink_on_false() {
+        assert_eq!(format_var_value(&VarValue::Bool { value: false, blink_on: false }), "○FALSE");
+    }
+
+    #[test]
+    fn format_byte() {
+        assert_eq!(format_var_value(&VarValue::Byte(255)), "255");
+        assert_eq!(format_var_value(&VarValue::Byte(0)), "0");
+    }
+
+    #[test]
+    fn format_word() {
+        assert_eq!(format_var_value(&VarValue::Word(0x1234)), "0x1234  (4660)");
+    }
+
+    #[test]
+    fn format_int_signed() {
+        assert_eq!(format_var_value(&VarValue::Int(-5)), "-5");
+        assert_eq!(format_var_value(&VarValue::Int(1000)), "1000");
+    }
+
+    #[test]
+    fn format_dword() {
+        assert_eq!(
+            format_var_value(&VarValue::DWord(0xDEAD_BEEF)),
+            "0xDEADBEEF  (3735928559)"
+        );
+    }
+
+    #[test]
+    fn format_dint_signed() {
+        assert_eq!(format_var_value(&VarValue::DInt(-100_000)), "-100000");
+    }
+
+    #[test]
+    fn format_real_three_decimals() {
+        assert_eq!(format_var_value(&VarValue::Real(3.14159)), "3.142");
+        assert_eq!(format_var_value(&VarValue::Real(0.0)), "0.000");
+    }
+
+    #[test]
+    fn format_string_val() {
+        assert_eq!(format_var_value(&VarValue::StringVal("hello".into())), "\"hello\"");
+        assert_eq!(format_var_value(&VarValue::StringVal(String::new())), "\"\"");
+    }
+
+    #[test]
+    fn format_unknown() {
+        assert_eq!(format_var_value(&VarValue::Unknown), "--");
     }
 }
