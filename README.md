@@ -1,49 +1,122 @@
-# Siemens PLC Monitor
+# S7Lens — Siemens PLC Monitor
 
-A Rust + egui desktop application for real-time monitoring of Siemens S7 PLC data blocks (DBs), with live variable display, JSON configuration persistence, and C# class export. Built on top of the [snap7](http://snap7.sourceforge.net/) open-source library for S7 communication.
+A lightweight desktop tool for real-time monitoring of Siemens S7 PLC data blocks (DBs). Define your variables once, watch live values update at your chosen poll rate, then export a ready-to-use C# data class compatible with `snap7dotnet ReadClass<T>`. No PLC config software required.
 
-**Target platform: Windows x86_64.** Built by cross-compiling from macOS (Intel x86_64) using the `x86_64-pc-windows-gnu` toolchain.
+Built with **Rust + egui** and the open-source [snap7](http://snap7.sourceforge.net/) library. Single binary, no installer.
 
 ---
 
-## Prerequisites
+## Features
 
-| Tool | How to get |
-|------|-----------|
-| Rust toolchain (stable, 2021 edition) | `curl https://sh.rustup.rs -sSf \| sh` |
+- **Live DB monitoring** — connects over TCP/IP to any Siemens S7-300/400/1200/1500 PLC and reads a full Data Block at a configurable poll rate (default 100 ms)
+- **All S7 primitive types** — Bool (with bit offset), Byte, Word, Int, DWord, DInt, Real, and String
+- **Bool blink animation** — TRUE signals pulse green / grey so alarm states are impossible to miss
+- **JSON config persistence** — save and reload your variable layout between sessions
+- **C# class export** — one click generates a `public class DB{N}` skeleton ready for `snap7dotnet ReadClass<T>`, including byte-decomposed String fields and an ASCII helper property
+- **Mock mode** — runs without a real PLC for UI development and testing (`cargo run` on any machine)
+- **Cross-platform build** — macOS (native `.app` bundle) and Windows x86_64 (cross-compiled from macOS with mingw-w64)
+
+---
+
+## UI Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🔌 Connection                                              │
+│  IP: [192.168.0.1]  Rack: [0]  Slot: [1]  DB: [100]        │
+│  [Connect]  [Disconnect]          ● Connected               │
+├─────────────────────────────────────────────────────────────┤
+│  📋 Variable Definitions                    [+ Add Row]     │
+│  ┌──────────────┬────────┬──────┬─────┬────────┬──────────┐ │
+│  │ Name         │ Type   │Byte  │ Bit │ Length │          │ │
+│  │ Run_Signal   │ Bool   │  0   │  0  │   -    │  [✕]     │ │
+│  │ ErrorCode    │ Word   │  2   │  -  │   -    │  [✕]     │ │
+│  │ Position     │ DWord  │  4   │  -  │   -    │  [✕]     │ │
+│  │ Serial_No    │ String │  8   │  -  │  30    │  [✕]     │ │
+│  │ Temperature  │ Real   │  40  │  -  │   -    │  [✕]     │ │
+│  └──────────────┴────────┴──────┴─────┴────────┴──────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│  📊 Live Monitor          Poll: [100] ms  [▶ Start] [■ Stop]│
+│  ┌──────────────┬────────┬──────────────────────────────────┐│
+│  │ Name         │ Type   │ Value                            ││
+│  │ Run_Signal   │ Bool   │ ●TRUE  (green, blinking)         ││
+│  │ ErrorCode    │ Word   │ 0x0042  (66)                     ││
+│  │ Position     │ DWord  │ 0x0001E240  (123456)             ││
+│  │ Serial_No    │ String │ "AB1234567890"                   ││
+│  │ Temperature  │ Real   │ 25.340                           ││
+│  └──────────────┴────────┴──────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  Config file: [config.json]  [💾 Save Config] [📂 Load]     │
+│  Export file: [output.cs]    [📤 Export C# Class]           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Variable Type Reference
+
+| S7 Type    | Rust `VarType`      | C# type   | Size      | Notes                          |
+|------------|---------------------|-----------|-----------|--------------------------------|
+| BOOL       | `Bool`              | `bool`    | 1 bit     | Bit offset 0–7 within the byte |
+| BYTE       | `Byte`              | `byte`    | 1 byte    |                                |
+| WORD       | `Word`              | `ushort`  | 2 bytes   | Displayed as hex + decimal     |
+| INT        | `Int`               | `short`   | 2 bytes   | Signed                         |
+| DWORD      | `DWord`             | `uint`    | 4 bytes   | Displayed as hex + decimal     |
+| DINT       | `DInt`              | `int`     | 4 bytes   | Signed                         |
+| REAL       | `Real`              | `float`   | 4 bytes   | Displayed to 3 decimal places  |
+| STRING[n]  | `String { length }` | `string`  | n bytes   | ASCII, null-trimmed            |
+
+All multi-byte types are parsed as **big-endian** (Siemens S7 standard).
+
+---
+
+## Getting Started
+
+### Run with mock data (no PLC needed)
+
+```bash
+cargo run
+```
+
+The app opens with simulated zero-valued data. You can define variables, test the export, and save/load configs without a real PLC.
+
+### Run tests
+
+```bash
+cargo test
+```
+
+---
+
+## Windows Build (cross-compile from macOS)
+
+### Prerequisites
+
+| Tool | Install |
+|------|---------|
+| Rust stable (2021) | `curl https://sh.rustup.rs -sSf \| sh` |
 | mingw-w64 cross-compiler | `brew install mingw-w64` |
-| p7zip (to extract snap7 archive) | `brew install p7zip` |
-| `snap7-full-1.4.2.7z` | Download from <http://snap7.sourceforge.net/> and place in the project root |
+| p7zip | `brew install p7zip` |
+| `snap7-full-1.4.2.7z` | Download from snap7.sourceforge.net → place in project root |
 
----
-
-## Windows Build
-
-Run the build script from the project root:
+### Build
 
 ```bash
 bash scripts/build-windows.sh
 ```
 
-The script:
-1. Installs the `x86_64-pc-windows-gnu` Rust target via `rustup target add`
-2. Checks that `x86_64-w64-mingw32-gcc` is available
-3. Extracts `snap7.dll` and `snap7.def` from `snap7-full-1.4.2.7z`
-4. Generates `libs/snap7/win64/libsnap7.a` (the mingw import library) via `dlltool`
-5. Runs `cargo build --release --target x86_64-pc-windows-gnu`
+The script installs the `x86_64-pc-windows-gnu` Rust target, extracts `snap7.dll` from the archive, generates a mingw import library, and produces the release binary.
 
-**Output files:**
+**Output:**
 
 | File | Location |
 |------|----------|
 | `siemens-plc-monitor.exe` | `target/x86_64-pc-windows-gnu/release/` |
 | `snap7.dll` | `libs/snap7/win64/` |
 
----
+### Deploy to Windows
 
-## Deployment on Windows
-
-Copy both files to the same folder on the target Windows machine:
+Copy both files into the same folder — no installer required:
 
 ```
 SiemensPLCMonitor\
@@ -51,66 +124,89 @@ SiemensPLCMonitor\
 └── snap7.dll
 ```
 
-Double-click `siemens-plc-monitor.exe` to run. No installer required.
-
 ---
 
-## Development Build (macOS, mock PLC)
+## macOS Build
 
-Without `libs/snap7/libsnap7.dylib` present, the app builds and runs with simulated PLC data (controlled by the `snap7_available` cfg flag in `build.rs`):
+Place `libsnap7.dylib` (from `snap7-full-1.4.2/build/osx/`) in `libs/snap7/`, then:
 
 ```bash
-cargo build    # debug build
-cargo run      # run with mock data
-cargo test     # run all unit tests
+cargo build --release
+```
+
+To produce a `.app` bundle:
+
+```bash
+cargo install cargo-bundle
+cargo bundle --release
+bash scripts/package.sh   # copies libsnap7.dylib into .app/Contents/Frameworks/
 ```
 
 ---
 
-## Variable Type Mapping
+## Usage
 
-| Rust `VarType`      | Siemens type | C# type   | Size (bytes) |
-|---------------------|--------------|-----------|--------------|
-| `Bool`              | BOOL         | `bool`    | 1 (1 bit)    |
-| `Byte`              | BYTE         | `byte`    | 1            |
-| `Word`              | WORD         | `ushort`  | 2            |
-| `Int`               | INT          | `short`   | 2            |
-| `DWord`             | DWORD        | `uint`    | 4            |
-| `DInt`              | DINT         | `int`     | 4            |
-| `Real`              | REAL         | `float`   | 4            |
-| `String { length }` | STRING[n]    | `string`  | n (n bytes)  |
-
----
-
-## Usage Guide
-
-1. **Connection panel** — Enter the PLC IP address, rack, slot, and DB number, then click **Connect**.
-2. **Variable Definitions panel** — Add rows for each DB variable: set the name, type, byte offset, bit offset (Bool only), and string length (String only). Use **+ Add Row** and **✕** to manage the list.
-3. **Live Monitor panel** — Click **▶ Start** to begin polling. Values update at the configured interval (default 100 ms). Bool variables blink green/grey while `TRUE`/`FALSE`. Click **■ Stop** to pause.
-4. **Toolbar**
-   - *Config file* — type a path and use **💾 Save Config** / **📂 Load Config** to persist the connection and variable definitions as JSON.
-   - *Export file* — type a `.cs` output path and click **📤 Export C# Class** to generate a C# data class for the current DB layout.
+1. **Connection** — enter the PLC IP, rack, slot, and DB number, then click **Connect**. The status indicator turns green when the connection succeeds.
+2. **Variable Definitions** — click **+ Add Row** for each variable you want to watch. Set the name, type, byte offset, and (for Bool) bit offset or (for String) length. Use **✕** to remove a row.
+3. **Live Monitor** — click **▶ Start** to begin polling. Values refresh at the poll interval. Bool variables blink green (TRUE) / grey (FALSE). Click **■ Stop** to pause.
+4. **Save / Load Config** — type a file path and use **💾 Save Config** or **📂 Load Config** to persist your variable layout as JSON.
+5. **Export C# Class** — type a `.cs` output path and click **📤 Export C# Class**. The generated file is compatible with `snap7dotnet ReadClass<T>`.
 
 ---
 
 ## C# Export Example
 
-Given DB 100 with a Bool flag at byte 0 bit 3, and a String of length 4 starting at byte 2, the export produces:
+Variables defined for DB 100:
+
+| Name        | Type       | Byte | Bit | Length |
+|-------------|------------|------|-----|--------|
+| Running     | Bool       | 0    | 3   | —      |
+| Temperature | Real       | 2    | —   | —      |
+| Serial      | String     | 6    | —   | 4      |
+
+Generated output:
 
 ```csharp
 // Auto-generated by Siemens PLC Monitor
-// DB: 100 | Generated: 2026-06-08 15:30:00
+// DB: 100 | Generated: 2026-06-10 09:00:00
 // Compatible with snap7dotnet ReadClass<T>
 
 public class DB100 {
     public bool Running { get; set; } // Byte 0, Bit 3
-    public byte tag_1 { get; set; } // Byte 2
-    public byte tag_2 { get; set; } // Byte 3
-    public byte tag_3 { get; set; } // Byte 4
-    public byte tag_4 { get; set; } // Byte 5
-    public string tag =>
-        System.Text.Encoding.ASCII.GetString(new byte[] { tag_1, tag_2, tag_3, tag_4 }).TrimEnd('\0');
+    public float Temperature { get; set; } // Byte 2
+    public byte Serial_1 { get; set; } // Byte 6
+    public byte Serial_2 { get; set; } // Byte 7
+    public byte Serial_3 { get; set; } // Byte 8
+    public byte Serial_4 { get; set; } // Byte 9
+    public string Serial =>
+        System.Text.Encoding.ASCII.GetString(new byte[] { Serial_1, Serial_2, Serial_3, Serial_4 }).TrimEnd('\0');
 }
 ```
 
-Use with `snap7dotnet` `ReadClass<T>` to map the DB block directly onto the generated class.
+String fields are decomposed into individual `byte` properties (one per DB byte) so `snap7dotnet` can map them directly, with a computed `string` property for convenient access.
+
+---
+
+## Architecture
+
+```
+UI thread (egui / eframe)
+      │
+      │  Arc<Mutex<SharedState>>
+      │
+Poller thread (std::thread)
+      │
+      │  FFI
+      │
+snap7 C library (libsnap7.dylib / snap7.dll)
+      │
+Siemens S7 PLC  ─── TCP/IP (port 102, ISO-on-TCP)
+```
+
+The poller thread holds the lock only while reading config and writing results — never during FFI calls or sleeps — keeping the UI responsive at all times.
+
+---
+
+## License
+
+This project uses [snap7](http://snap7.sourceforge.net/) which is licensed under the GNU Lesser General Public License v3.
